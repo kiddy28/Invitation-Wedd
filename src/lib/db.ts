@@ -1,23 +1,13 @@
-import Database from "better-sqlite3";
-import fs from "node:fs";
-import path from "node:path";
+import { createClient } from "@libsql/client";
 
-const DB_DIR = path.resolve(process.cwd(), "database");
-const DB_FILE = path.join(DB_DIR, "wedding.db");
-const OLD_DB_FILE = path.resolve(process.cwd(), "wedding.db");
+// Inisialisasi koneksi ke Turso Cloud Database via Environment Variables
+export const db = createClient({
+  url: process.env.TURSO_DATABASE_URL || "",
+  authToken: process.env.TURSO_AUTH_TOKEN || "",
+});
 
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
-}
-
-if (fs.existsSync(OLD_DB_FILE) && !fs.existsSync(DB_FILE)) {
-  fs.renameSync(OLD_DB_FILE, DB_FILE);
-}
-
-const db = new Database(DB_FILE);
-db.pragma("journal_mode = WAL");
-
-db.exec(`
+// Penyiapan tabel utama di Cloud Database
+await db.executeMultiple(`
   CREATE TABLE IF NOT EXISTS rsvps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guest_name TEXT NOT NULL,
@@ -41,6 +31,7 @@ db.exec(`
   );
 `);
 
+// Data Default Konfigurasi Undangan
 const DEFAULT_CONFIG: Record<string, string> = {
   BRIDE_NICKNAME: "Fey",
   BRIDE_FULLNAME: "Fera Oktapia",
@@ -121,30 +112,30 @@ const DEFAULT_CONFIG: Record<string, string> = {
   TELEGRAM_CHAT_ID: "",
 };
 
-const insertDefault = db.prepare(
-  "INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)"
-);
-const insertMany = db.transaction(() => {
-  for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
-    insertDefault.run(key, value);
+// Inisialisasi Data Default ke Turso Database secara Async
+for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
+  await db.execute({
+    sql: "INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)",
+    args: [key, value],
+  });
+}
+
+// Fungsi Async untuk Membaca Konfigurasi dari Turso
+export const getConfig = async (): Promise<Record<string, string>> => {
+  const result = await db.execute("SELECT key, value FROM config");
+  const configMap: Record<string, string> = {};
+  for (const row of result.rows) {
+    configMap[String(row.key)] = String(row.value);
   }
-});
-insertMany();
-
-export const getConfig = (): Record<string, string> => {
-  const rows = db.prepare("SELECT key, value FROM config").all() as {
-    key: string;
-    value: string;
-  }[];
-  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  return configMap;
 };
 
-export const setConfig = (key: string, value: string): void => {
-  db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)").run(
-    key,
-    value
-  );
+// Fungsi Async untuk Mengubah/Menyimpan Konfigurasi ke Turso
+export const setConfig = async (key: string, value: string): Promise<void> => {
+  await db.execute({
+    sql: "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+    args: [key, value],
+  });
 };
 
-export const getDbPath = () => DB_FILE;
 export default db;
